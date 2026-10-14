@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
   <title>Służba</title>
   <meta name="description" content="Raportowanie czasu w służbie – godziny, KŁS, studia, pionier pomocniczy." />
-  <meta name="theme-color" content="#1d4ed8" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Służba" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
@@ -17,30 +17,78 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <button class="icon-btn" id="prevMonth" aria-label="Poprzedni miesiąc">‹</button>
-    <button class="month-title" id="monthTitle" aria-label="Wybierz miesiąc"></button>
-    <button class="icon-btn" id="nextMonth" aria-label="Następny miesiąc">›</button>
+  <header class="appbar">
+    <h1>Służba</h1>
+    <button class="gear-btn" id="openSettings" aria-label="Ustawienia">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.04 7.04 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.14.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.8 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.92 14.16a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.49.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.8c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.14-.54 1.63-.94l2.39.96c.24.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/>
+      </svg>
+    </button>
   </header>
 
   <main id="app">
-    <!-- Widok: Miesiąc -->
-    <section class="view" id="view-month">
+    <!-- Raport: szybki zapis dnia -->
+    <section class="view" id="view-report">
+      <div class="day-nav">
+        <button class="circle-btn" id="prevDay" aria-label="Poprzedni dzień">‹</button>
+        <button class="day-pill" id="dayTitle" aria-label="Wybierz dzień"></button>
+        <button class="circle-btn" id="nextDay" aria-label="Następny dzień">›</button>
+      </div>
+
+      <p class="eyebrow">Wprowadź czas służby</p>
+      <button class="time-pill" id="timePill" aria-label="Ustaw czas"></button>
+      <div class="quick" id="timeQuick">
+        <button type="button" data-add="-15">−15 min</button>
+        <button type="button" data-add="15">+15 min</button>
+        <button type="button" data-add="30">+30 min</button>
+        <button type="button" data-add="60">+1 h</button>
+      </div>
+
+      <p class="eyebrow">Wybierz rodzaj służby</p>
+      <div class="cats" id="cats" role="radiogroup" aria-label="Rodzaj służby">
+        <button data-cat="teren" role="radio">Teren</button>
+        <button data-cat="kls" role="radio">KŁS</button>
+      </div>
+
+      <button class="btn primary save-btn" id="saveReport">Zapisz raport</button>
+
+      <ul class="day-entries" id="dayEntries"></ul>
+
+      <div class="card ring-card" id="ringCard"></div>
+    </section>
+
+    <!-- Podsumowanie: kalendarz + miesiąc -->
+    <section class="view hidden" id="view-summary">
+      <p class="eyebrow">Dzisiejsze podsumowanie</p>
+      <div class="card today-card" id="todayCard"></div>
+
+      <p class="eyebrow">Miesięczna aktywność</p>
+      <div class="card cal-card">
+        <div class="row between">
+          <button class="text-nav" id="prevCalMonth" aria-label="Poprzedni miesiąc">‹</button>
+          <button class="cal-month" id="calMonthTitle"></button>
+          <button class="text-nav" id="nextCalMonth" aria-label="Następny miesiąc">›</button>
+        </div>
+        <div class="cal-sum" id="calSum"></div>
+        <div class="cal-weekdays" aria-hidden="true">
+          <span>Pn</span><span>Wt</span><span>Śr</span><span>Cz</span><span>Pt</span><span>Sb</span><span>Nd</span>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+      </div>
+
+      <p class="eyebrow">Podsumowanie miesiąca</p>
+      <div class="card" id="monthCard"></div>
+
       <div class="card">
-        <label class="field-label" for="monthType">Status w tym miesiącu</label>
+        <label class="field-label">Status w tym miesiącu</label>
         <div class="segmented" id="typeSegments" role="radiogroup" aria-label="Status w tym miesiącu">
           <button data-type="publisher" role="radio">Głosiciel</button>
           <button data-type="aux15" role="radio">Pom. 15 h</button>
           <button data-type="aux30" role="radio">Pom. 30 h</button>
           <button data-type="regular" role="radio">Stały</button>
         </div>
-      </div>
-
-      <div class="card summary" id="summary"></div>
-
-      <div class="card">
-        <div class="row between">
-          <span class="field-label">Studia biblijne</span>
+        <div class="row between" style="margin-top:14px">
+          <span class="field-label" style="margin:0">Studia biblijne</span>
           <div class="stepper">
             <button id="studiesMinus" aria-label="Mniej studiów">−</button>
             <span id="studiesValue">0</span>
@@ -51,25 +99,17 @@
         <textarea id="monthNotes" rows="2" placeholder="np. zebranie służbowe, urlop…"></textarea>
       </div>
 
-      <div class="row between section-head">
-        <h2>Wpisy</h2>
-        <button class="btn primary" id="addEntry">+ Dodaj</button>
-      </div>
-      <ul class="entries" id="entries"></ul>
-
-      <div class="row" style="margin-top:16px; gap:8px">
-        <button class="btn" id="shareReport">Udostępnij raport</button>
-        <button class="btn" id="copyReport">Kopiuj</button>
-      </div>
+      <button class="btn primary save-btn" id="shareReport">Wyślij sprawozdanie</button>
+      <button class="btn" id="copyReport" style="margin-top:8px">Kopiuj</button>
     </section>
 
-    <!-- Widok: Historia -->
+    <!-- Historia -->
     <section class="view hidden" id="view-history">
       <div class="card" id="serviceYear"></div>
       <ul class="history" id="historyList"></ul>
     </section>
 
-    <!-- Widok: Ustawienia -->
+    <!-- Ustawienia -->
     <section class="view hidden" id="view-settings">
       <div class="card">
         <label class="field-label">Domyślny status nowego miesiąca</label>
@@ -79,7 +119,7 @@
           <option value="aux30">Pionier pomocniczy (30 h)</option>
           <option value="regular">Pionier stały (50 h)</option>
         </select>
-        <p class="hint">Status można zawsze zmienić osobno dla każdego miesiąca.</p>
+        <p class="hint">Status można zawsze zmienić osobno dla każdego miesiąca w Podsumowaniu.</p>
       </div>
       <div class="card">
         <label class="field-label">Kopia zapasowa</label>
@@ -93,29 +133,23 @@
       <div class="card">
         <button class="btn danger" id="wipeBtn">Usuń wszystkie dane</button>
       </div>
-      <p class="hint center">Służba · v1.0</p>
+      <p class="hint center">Służba · v1.1</p>
     </section>
   </main>
 
   <nav class="tabbar">
-    <button data-view="month" class="active">Miesiąc</button>
+    <button data-view="report" class="active">Raport</button>
+    <button data-view="summary">Podsumowanie</button>
     <button data-view="history">Historia</button>
-    <button data-view="settings">Ustawienia</button>
   </nav>
 
-  <!-- Dialog: wpis -->
-  <dialog id="entryDialog">
-    <form method="dialog" id="entryForm">
-      <h3 id="entryDialogTitle">Nowy wpis</h3>
-
-      <label class="field-label" for="entryDate">Data</label>
-      <input type="date" id="entryDate" required />
-
-      <label class="field-label">Służba</label>
+  <dialog id="timeDialog">
+    <form method="dialog" id="timeForm">
+      <h3>Czas służby</h3>
       <div class="time-input">
-        <input type="number" id="entryHours" min="0" max="24" inputmode="numeric" placeholder="0" />
+        <input type="number" id="pickHours" min="0" max="24" inputmode="numeric" />
         <span>h</span>
-        <select id="entryMinutes">
+        <select id="pickMinutes">
           <option value="0">00</option>
           <option value="15">15</option>
           <option value="30">30</option>
@@ -123,45 +157,52 @@
         </select>
         <span>min</span>
       </div>
-      <div class="quick" data-target="service">
-        <button type="button" data-add="30">+30 min</button>
-        <button type="button" data-add="60">+1 h</button>
-        <button type="button" data-add="120">+2 h</button>
-      </div>
-
-      <label class="field-label">KŁS (osobno, nie wlicza się do godzin)</label>
-      <div class="time-input">
-        <input type="number" id="klsHours" min="0" max="24" inputmode="numeric" placeholder="0" />
-        <span>h</span>
-        <select id="klsMinutes">
-          <option value="0">00</option>
-          <option value="15">15</option>
-          <option value="30">30</option>
-          <option value="45">45</option>
-        </select>
-        <span>min</span>
-      </div>
-
-      <label class="field-label" for="entryNote">Notatka</label>
-      <input type="text" id="entryNote" placeholder="opcjonalnie" />
-
-      <div class="row" style="gap:8px; margin-top:16px">
-        <button type="button" class="btn danger hidden" id="deleteEntry">Usuń</button>
-        <span style="flex:1"></span>
-        <button type="button" class="btn" id="cancelEntry">Anuluj</button>
-        <button type="submit" class="btn primary">Zapisz</button>
+      <div class="row" style="gap:8px; margin-top:16px; justify-content:flex-end">
+        <button type="button" class="btn" id="cancelTime">Anuluj</button>
+        <button type="submit" class="btn primary">OK</button>
       </div>
     </form>
   </dialog>
 
-  <!-- Dialog: wybór miesiąca -->
-  <dialog id="monthDialog">
+  <dialog id="dateDialog">
     <form method="dialog">
-      <h3>Przejdź do miesiąca</h3>
-      <input type="month" id="monthPicker" />
+      <h3>Wybierz dzień</h3>
+      <input type="date" id="datePicker" />
       <div class="row" style="gap:8px; margin-top:16px; justify-content:flex-end">
         <button type="button" class="btn" id="todayBtn">Dziś</button>
         <button type="submit" class="btn primary">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="entryDialog">
+    <form method="dialog" id="entryForm">
+      <h3>Wpis</h3>
+      <p class="hint" id="editMeta"></p>
+      <label class="field-label">Czas</label>
+      <div class="time-input">
+        <input type="number" id="editHours" min="0" max="24" inputmode="numeric" />
+        <span>h</span>
+        <select id="editMinutes">
+          <option value="0">00</option>
+          <option value="15">15</option>
+          <option value="30">30</option>
+          <option value="45">45</option>
+        </select>
+        <span>min</span>
+      </div>
+      <label class="field-label">Rodzaj</label>
+      <div class="cats" id="editCats" role="radiogroup">
+        <button type="button" data-cat="teren" role="radio">Teren</button>
+        <button type="button" data-cat="kls" role="radio">KŁS</button>
+      </div>
+      <label class="field-label" for="entryNote">Notatka</label>
+      <input type="text" id="entryNote" placeholder="opcjonalnie" />
+      <div class="row" style="gap:8px; margin-top:16px">
+        <button type="button" class="btn danger" id="deleteEntry">Usuń</button>
+        <span style="flex:1"></span>
+        <button type="button" class="btn" id="cancelEntry">Anuluj</button>
+        <button type="submit" class="btn primary">Zapisz</button>
       </div>
     </form>
   </dialog>
