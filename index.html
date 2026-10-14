@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <title>Służba</title>
+  <meta name="description" content="Raportowanie czasu w służbie – godziny, KŁS, studia, pionier pomocniczy." />
+  <meta name="theme-color" content="#1d4ed8" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Służba" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="icon" href="icons/icon-192.png" type="image/png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn" id="prevMonth" aria-label="Poprzedni miesiąc">‹</button>
+    <button class="month-title" id="monthTitle" aria-label="Wybierz miesiąc"></button>
+    <button class="icon-btn" id="nextMonth" aria-label="Następny miesiąc">›</button>
+  </header>
+
+  <main id="app">
+    <!-- Widok: Miesiąc -->
+    <section class="view" id="view-month">
+      <div class="card">
+        <label class="field-label" for="monthType">Status w tym miesiącu</label>
+        <div class="segmented" id="typeSegments" role="radiogroup" aria-label="Status w tym miesiącu">
+          <button data-type="publisher" role="radio">Głosiciel</button>
+          <button data-type="aux15" role="radio">Pom. 15 h</button>
+          <button data-type="aux30" role="radio">Pom. 30 h</button>
+          <button data-type="regular" role="radio">Stały</button>
+        </div>
+      </div>
+
+      <div class="card summary" id="summary"></div>
+
+      <div class="card">
+        <div class="row between">
+          <span class="field-label">Studia biblijne</span>
+          <div class="stepper">
+            <button id="studiesMinus" aria-label="Mniej studiów">−</button>
+            <span id="studiesValue">0</span>
+            <button id="studiesPlus" aria-label="Więcej studiów">+</button>
+          </div>
+        </div>
+        <label class="field-label" for="monthNotes" style="margin-top:12px">Uwagi do miesiąca</label>
+        <textarea id="monthNotes" rows="2" placeholder="np. zebranie służbowe, urlop…"></textarea>
+      </div>
+
+      <div class="row between section-head">
+        <h2>Wpisy</h2>
+        <button class="btn primary" id="addEntry">+ Dodaj</button>
+      </div>
+      <ul class="entries" id="entries"></ul>
+
+      <div class="row" style="margin-top:16px; gap:8px">
+        <button class="btn" id="shareReport">Udostępnij raport</button>
+        <button class="btn" id="copyReport">Kopiuj</button>
+      </div>
+    </section>
+
+    <!-- Widok: Historia -->
+    <section class="view hidden" id="view-history">
+      <div class="card" id="serviceYear"></div>
+      <ul class="history" id="historyList"></ul>
+    </section>
+
+    <!-- Widok: Ustawienia -->
+    <section class="view hidden" id="view-settings">
+      <div class="card">
+        <label class="field-label">Domyślny status nowego miesiąca</label>
+        <select id="defaultType">
+          <option value="publisher">Głosiciel</option>
+          <option value="aux15">Pionier pomocniczy (15 h)</option>
+          <option value="aux30">Pionier pomocniczy (30 h)</option>
+          <option value="regular">Pionier stały (50 h)</option>
+        </select>
+        <p class="hint">Status można zawsze zmienić osobno dla każdego miesiąca.</p>
+      </div>
+      <div class="card">
+        <label class="field-label">Kopia zapasowa</label>
+        <div class="row" style="gap:8px">
+          <button class="btn" id="exportBtn">Eksportuj JSON</button>
+          <button class="btn" id="importBtn">Importuj JSON</button>
+          <input type="file" id="importFile" accept="application/json,.json" hidden />
+        </div>
+        <p class="hint">Dane są zapisane tylko na tym urządzeniu. Zrób eksport przed zmianą telefonu.</p>
+      </div>
+      <div class="card">
+        <button class="btn danger" id="wipeBtn">Usuń wszystkie dane</button>
+      </div>
+      <p class="hint center">Służba · v1.0</p>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button data-view="month" class="active">Miesiąc</button>
+    <button data-view="history">Historia</button>
+    <button data-view="settings">Ustawienia</button>
+  </nav>
+
+  <!-- Dialog: wpis -->
+  <dialog id="entryDialog">
+    <form method="dialog" id="entryForm">
+      <h3 id="entryDialogTitle">Nowy wpis</h3>
+
+      <label class="field-label" for="entryDate">Data</label>
+      <input type="date" id="entryDate" required />
+
+      <label class="field-label">Służba</label>
+      <div class="time-input">
+        <input type="number" id="entryHours" min="0" max="24" inputmode="numeric" placeholder="0" />
+        <span>h</span>
+        <select id="entryMinutes">
+          <option value="0">00</option>
+          <option value="15">15</option>
+          <option value="30">30</option>
+          <option value="45">45</option>
+        </select>
+        <span>min</span>
+      </div>
+      <div class="quick" data-target="service">
+        <button type="button" data-add="30">+30 min</button>
+        <button type="button" data-add="60">+1 h</button>
+        <button type="button" data-add="120">+2 h</button>
+      </div>
+
+      <label class="field-label">KŁS (osobno, nie wlicza się do godzin)</label>
+      <div class="time-input">
+        <input type="number" id="klsHours" min="0" max="24" inputmode="numeric" placeholder="0" />
+        <span>h</span>
+        <select id="klsMinutes">
+          <option value="0">00</option>
+          <option value="15">15</option>
+          <option value="30">30</option>
+          <option value="45">45</option>
+        </select>
+        <span>min</span>
+      </div>
+
+      <label class="field-label" for="entryNote">Notatka</label>
+      <input type="text" id="entryNote" placeholder="opcjonalnie" />
+
+      <div class="row" style="gap:8px; margin-top:16px">
+        <button type="button" class="btn danger hidden" id="deleteEntry">Usuń</button>
+        <span style="flex:1"></span>
+        <button type="button" class="btn" id="cancelEntry">Anuluj</button>
+        <button type="submit" class="btn primary">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Dialog: wybór miesiąca -->
+  <dialog id="monthDialog">
+    <form method="dialog">
+      <h3>Przejdź do miesiąca</h3>
+      <input type="month" id="monthPicker" />
+      <div class="row" style="gap:8px; margin-top:16px; justify-content:flex-end">
+        <button type="button" class="btn" id="todayBtn">Dziś</button>
+        <button type="submit" class="btn primary">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
