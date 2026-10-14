@@ -32,6 +32,7 @@
       <div class="day-nav">
         <button class="circle-btn" id="prevDay" aria-label="Poprzedni dzień">‹</button>
         <button class="day-pill" id="dayTitle" aria-label="Wybierz dzień"></button>
+        <button class="today-chip hidden" id="jumpToday">Dziś</button>
         <button class="circle-btn" id="nextDay" aria-label="Następny dzień">›</button>
       </div>
 
@@ -124,8 +125,8 @@
       <div class="card">
         <label class="field-label">Kopia zapasowa</label>
         <div class="row" style="gap:8px">
-          <button class="btn" id="exportBtn">Eksportuj JSON</button>
-          <button class="btn" id="importBtn">Importuj JSON</button>
+          <button class="btn" id="exportBtn">Udostępnij kopię</button>
+          <button class="btn" id="importBtn">Wczytaj kopię</button>
           <input type="file" id="importFile" accept="application/json,.json" hidden />
         </div>
         <p class="hint">Dane są zapisane tylko na tym urządzeniu. Zrób eksport przed zmianą telefonu.</p>
@@ -133,7 +134,7 @@
       <div class="card">
         <button class="btn danger" id="wipeBtn">Usuń wszystkie dane</button>
       </div>
-      <p class="hint center">Służba · v1.1</p>
+      <p class="hint center">Służba · v1.2</p>
     </section>
   </main>
 

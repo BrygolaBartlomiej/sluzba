@@ -1,4 +1,4 @@
-const CACHE = 'sluzba-v2';
+const CACHE = 'sluzba-v3';
 const ASSETS = [
   './',
   './index.html',

@@ -54,9 +54,28 @@
         }
         if (!e.min && !e.kls) next.push({ id: e.id, date: e.date, min: 0, cat: 'teren', note: e.note || '' });
       }
-      if (changed) mo.entries = next;
+      const collapsed = collapseEntries(next.length ? next : (mo.entries || []));
+      if (JSON.stringify(collapsed) !== JSON.stringify(mo.entries)) changed = true;
+      mo.entries = collapsed;
     }
     if (changed) localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
+  function collapseEntries(entries) {
+    const map = new Map();
+    const order = [];
+    for (const e of entries) {
+      const cat = entryCat(e);
+      const key = `${e.date}|${cat}`;
+      if (!map.has(key)) {
+        map.set(key, { id: e.id, date: e.date, min: e.min || 0, cat, note: e.note || '' });
+        order.push(key);
+      } else {
+        const cur = map.get(key);
+        cur.min += e.min || 0;
+        if (e.note) cur.note = cur.note ? `${cur.note}; ${e.note}` : e.note;
+      }
+    }
+    return order.map((k) => map.get(k));
   }
   function save() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -197,6 +216,7 @@
         </li>`).join('');
     }
     els.ringCard.innerHTML = ringHtml(monthKeyFromDay(currentDay));
+    $('jumpToday').classList.toggle('hidden', currentDay === todayISO());
   }
 
   function ringHtml(key) {
@@ -386,16 +406,26 @@
     }
   }
 
+  let saving = false;
   function saveDraftEntry() {
+    if (saving) return;
     if (draftMin <= 0) { toast('Ustaw czas służby'); return; }
-    const key = monthKeyFromDay(currentDay);
-    const month = getMonth(key, true);
-    month.entries.push({ id: uid(), date: currentDay, min: draftMin, cat: draftCat, note: '' });
-    state.settings.lastMin = draftMin;
-    state.settings.lastCat = draftCat;
+    saving = true;
+    const cat = draftCat;
+    const add = draftMin;
+    const month = getMonth(monthKeyFromDay(currentDay), true);
+    const existing = month.entries.find((e) => e.date === currentDay && entryCat(e) === cat);
+    if (existing) existing.min += add;
+    else month.entries.push({ id: uid(), date: currentDay, min: add, cat, note: '' });
+    draftCat = 'teren';
+    state.settings.lastMin = add;
+    state.settings.lastCat = 'teren';
     save();
     render();
-    toast(draftCat === 'kls' ? 'Zapisano KŁS' : 'Zapisano teren');
+    toast(existing
+      ? `${CATS[cat].short}: ${fmtH(existing.min)}`
+      : (cat === 'kls' ? 'Zapisano KŁS' : 'Zapisano teren'));
+    setTimeout(() => { saving = false; }, 280);
   }
 
   function openEdit(id) {
@@ -414,14 +444,20 @@
     if (!editingId) return;
     const min = getTimeInputs(els.editHours, els.editMinutes);
     if (min <= 0) { toast('Ustaw czas'); return; }
+    const note = els.entryNote.value.trim();
     for (const mo of Object.values(state.months)) {
       const e = (mo.entries || []).find((x) => x.id === editingId);
-      if (e) {
-        e.min = min;
-        e.cat = editCat;
-        e.note = els.entryNote.value.trim();
-        break;
+      if (!e) continue;
+      e.min = min;
+      e.cat = editCat;
+      e.note = note;
+      const other = (mo.entries || []).find((x) => x.id !== e.id && x.date === e.date && entryCat(x) === editCat);
+      if (other) {
+        other.min += e.min;
+        if (e.note) other.note = other.note ? `${other.note}; ${e.note}` : e.note;
+        mo.entries = mo.entries.filter((x) => x.id !== e.id);
       }
+      break;
     }
     save();
     render();
@@ -447,11 +483,30 @@
     toastTimer = setTimeout(() => els.toast.classList.remove('show'), 1800);
   }
 
-  function exportJSON() {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+  async function exportJSON() {
+    const text = JSON.stringify(state, null, 2);
+    const filename = `sluzba-${todayISO()}.json`;
+    const file = new File([text], filename, { type: 'application/json' });
+    if (navigator.share) {
+      try {
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: 'Kopia Służba' });
+          return;
+        }
+        await navigator.share({ text, title: filename });
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Skopiowano kopię zapasową');
+      return;
+    } catch { /* fallback poniżej */ }
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
     const a = document.createElement('a');
-    a.href = url; a.download = `sluzba-${todayISO()}.json`;
+    a.href = url; a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -479,6 +534,7 @@
     render();
   };
   $('todayBtn').onclick = () => { currentDay = todayISO(); els.dateDialog.close(); render(); };
+  $('jumpToday').onclick = () => { currentDay = todayISO(); render(); };
 
   els.timePill.onclick = () => {
     setTimeInputs(els.pickHours, els.pickMinutes, draftMin);
