@@ -3,6 +3,10 @@
   'use strict';
 
   const STORAGE_KEY = 'sluzba.v1';
+  const SYNC_KEY = 'sluzba.sync';
+  const GIST_ID = 'cc0454ad89f51a930bd15d4491003c70';
+  const GIST_FILE = 'sluzba-sync.json';
+  const GIST_RAW = `https://gist.githubusercontent.com/BrygolaBartlomiej/${GIST_ID}/raw/${GIST_FILE}`;
   const CATS = { teren: { label: 'Teren', short: 'Teren' }, kls: { label: 'KŁS', short: 'KŁS' } };
   const TYPES = {
     publisher: { label: 'Głosiciel', short: 'Głosiciel', goal: 0 },
@@ -18,6 +22,16 @@
   const RING_R = 54;
   const RING_C = 2 * Math.PI * RING_R;
 
+  let cloudReady = false;
+  let lastSyncAt = 0;
+  let lastSyncError = '';
+  let pushing = false;
+  let syncInfo = { password: '', token: '' };
+  try {
+    const rawSync = localStorage.getItem(SYNC_KEY);
+    if (rawSync) syncInfo = JSON.parse(rawSync);
+  } catch (e) { /* ignore */ }
+
   let state = load();
   let currentDay = todayISO();
   let draftMin = state.settings.lastMin || 60;
@@ -31,6 +45,8 @@
     const data = {
       settings: { defaultType: 'publisher', lastMin: 60, lastCat: 'teren', ...(raw && raw.settings) },
       months: (raw && raw.months) || {},
+      removed: (raw && raw.removed) || {},
+      updatedAt: (raw && raw.updatedAt) || 0,
     };
     migrate(data);
     return data;
@@ -54,31 +70,224 @@
         }
         if (!e.min && !e.kls) next.push({ id: e.id, date: e.date, min: 0, cat: 'teren', note: e.note || '' });
       }
-      const collapsed = collapseEntries(next.length ? next : (mo.entries || []));
+      data.removed = data.removed || {};
+      const collapsed = collapseEntries(next.length ? next : (mo.entries || []), data.removed);
       if (JSON.stringify(collapsed) !== JSON.stringify(mo.entries)) changed = true;
       mo.entries = collapsed;
     }
     if (changed) localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }
-  function collapseEntries(entries) {
+  function collapseEntries(entries, removed) {
     const map = new Map();
     const order = [];
     for (const e of entries) {
       const cat = entryCat(e);
       const key = `${e.date}|${cat}`;
       if (!map.has(key)) {
-        map.set(key, { id: e.id, date: e.date, min: e.min || 0, cat, note: e.note || '' });
+        map.set(key, { id: e.id, date: e.date, min: e.min || 0, cat, note: e.note || '', updatedAt: e.updatedAt || 0 });
         order.push(key);
       } else {
         const cur = map.get(key);
+        if (e.id && e.id !== cur.id && removed) removed[e.id] = Date.now();
         cur.min += e.min || 0;
         if (e.note) cur.note = cur.note ? `${cur.note}; ${e.note}` : e.note;
+        if ((e.updatedAt || 0) > (cur.updatedAt || 0)) cur.updatedAt = e.updatedAt;
       }
     }
     return order.map((k) => map.get(k));
   }
   function save() {
+    state.updatedAt = Date.now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (cloudReady) schedulePush();
+  }
+  function touchMonth(key) {
+    const mo = getMonth(key, true);
+    mo.updatedAt = Date.now();
+    return mo;
+  }
+  function markRemoved(id) {
+    if (!id) return;
+    state.removed = state.removed || {};
+    state.removed[id] = Date.now();
+  }
+
+  function saveSync() {
+    localStorage.setItem(SYNC_KEY, JSON.stringify({ password: syncInfo.password || '', token: syncInfo.token || '' }));
+  }
+  const syncOn = () => !!(syncInfo && syncInfo.password);
+
+  function b64enc(u8) {
+    let s = '';
+    for (const b of u8) s += String.fromCharCode(b);
+    return btoa(s);
+  }
+  function b64dec(str) {
+    const bin = atob(str);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+  async function deriveKey(password, salt) {
+    const raw = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: 120000, hash: 'SHA-256' },
+      raw,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+  async function encryptPayload(password, obj) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(password, salt);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+    return { v: 1, s: b64enc(salt), i: b64enc(iv), c: b64enc(new Uint8Array(ct)) };
+  }
+  async function decryptPayload(password, blob) {
+    if (!blob || !blob.c) return null;
+    const key = await deriveKey(password, b64dec(blob.s));
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64dec(blob.i) }, key, b64dec(blob.c));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }
+  function mergeList(a, b, removed) {
+    const m = new Map();
+    for (const e of [...(b || []), ...(a || [])]) {
+      if (!e || !e.id) continue;
+      const rem = removed[e.id];
+      if (rem && (!e.updatedAt || e.updatedAt <= rem)) continue;
+      const prev = m.get(e.id);
+      if (!prev || (e.updatedAt || 0) >= (prev.updatedAt || 0)) m.set(e.id, e);
+    }
+    return collapseEntries([...m.values()], removed);
+  }
+  function mergeMonth(localMo, remoteMo, removed) {
+    const a = localMo || { type: 'publisher', studies: 0, notes: '', entries: [], updatedAt: 0 };
+    const b = remoteMo || { type: 'publisher', studies: 0, notes: '', entries: [], updatedAt: 0 };
+    const newer = (a.updatedAt || 0) >= (b.updatedAt || 0) ? a : b;
+    return {
+      type: newer.type || 'publisher',
+      studies: newer.studies || 0,
+      notes: newer.notes || '',
+      updatedAt: Math.max(a.updatedAt || 0, b.updatedAt || 0),
+      entries: mergeList(a.entries, b.entries, removed),
+    };
+  }
+  function mergeState(local, remote) {
+    if (!remote) return local;
+    if (!local) return remote;
+    const removed = { ...(remote.removed || {}), ...(local.removed || {}) };
+    const keys = new Set([...Object.keys(local.months || {}), ...Object.keys(remote.months || {})]);
+    const months = {};
+    for (const k of keys) months[k] = mergeMonth((local.months || {})[k], (remote.months || {})[k], removed);
+    const settings = (local.updatedAt || 0) >= (remote.updatedAt || 0) ? local.settings : remote.settings;
+    return {
+      settings: settings || { defaultType: 'publisher', lastMin: 60, lastCat: 'teren' },
+      months,
+      removed,
+      updatedAt: Math.max(local.updatedAt || 0, remote.updatedAt || 0),
+    };
+  }
+  function payloadOf(s) {
+    return {
+      settings: s.settings,
+      months: s.months,
+      removed: s.removed || {},
+      updatedAt: s.updatedAt || Date.now(),
+      gistToken: syncInfo.token || '',
+    };
+  }
+  async function cloudPull() {
+    if (!syncOn()) return;
+    let text = '';
+    try {
+      const raw = await fetch(`${GIST_RAW}?t=${Date.now()}`, { cache: 'no-store' });
+      if (raw.ok) text = await raw.text();
+      else if (syncInfo.token) {
+        const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+          headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${syncInfo.token}` },
+        });
+        if (!res.ok) throw new Error('odczyt ' + res.status);
+        const g = await res.json();
+        text = (g.files && g.files[GIST_FILE] && g.files[GIST_FILE].content) || '';
+      } else if (raw.status === 404) return;
+      else throw new Error('odczyt ' + raw.status);
+    } catch (e) {
+      if (syncInfo.token) throw e;
+      return;
+    }
+    text = (text || '').trim();
+    if (!text || text === '{"v":1,"blob":""}') return;
+    let blob;
+    try { blob = JSON.parse(text); } catch (e) { return; }
+    if (!blob.c) return;
+    let remote;
+    try {
+      remote = await decryptPayload(syncInfo.password, blob);
+    } catch (e) {
+      throw new Error('złe hasło');
+    }
+    if (!remote) throw new Error('złe hasło');
+    if (remote.gistToken && !syncInfo.token) {
+      syncInfo.token = remote.gistToken;
+      saveSync();
+    }
+    state = mergeState(state, remote);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    lastSyncAt = Date.now();
+    lastSyncError = '';
+  }
+  async function cloudPush() {
+    if (!syncOn() || !syncInfo.token || pushing) return;
+    pushing = true;
+    try {
+      const enc = await encryptPayload(syncInfo.password, payloadOf(state));
+      const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+        method: 'PATCH',
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${syncInfo.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(enc) } } }),
+      });
+      if (res.status === 401 || res.status === 403) throw new Error('klucz GitHub nieważny');
+      if (!res.ok) throw new Error('zapis ' + res.status);
+      lastSyncAt = Date.now();
+      lastSyncError = '';
+    } finally {
+      pushing = false;
+    }
+  }
+  let pushTimer;
+  function schedulePush() {
+    if (!syncOn() || !syncInfo.token) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      cloudPush().catch((e) => { lastSyncError = e.message || 'błąd zapisu'; renderSync(); });
+    }, 800);
+  }
+  async function startCloud() {
+    if (!syncOn()) { cloudReady = true; return; }
+    try {
+      await cloudPull();
+    } catch (e) {
+      lastSyncError = e.message || 'błąd odczytu';
+    }
+    cloudReady = true;
+    if (syncInfo.token) {
+      try { await cloudPush(); } catch (e) { lastSyncError = e.message || 'błąd zapisu'; }
+    }
+    render();
+    setInterval(() => {
+      if (!syncOn() || document.hidden) return;
+      cloudPull().then(() => render()).catch((e) => { lastSyncError = e.message || 'błąd odczytu'; });
+    }, 25000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden || !syncOn()) return;
+      cloudPull().then(() => render()).catch((e) => { lastSyncError = e.message || 'błąd odczytu'; });
+    });
   }
 
   function pad(n) { return String(n).padStart(2, '0'); }
@@ -114,7 +323,7 @@
   function getMonth(key, create = false) {
     let mo = state.months[key];
     if (!mo && create) {
-      mo = state.months[key] = { type: state.settings.defaultType, studies: 0, notes: '', entries: [] };
+      mo = state.months[key] = { type: state.settings.defaultType, studies: 0, notes: '', entries: [], updatedAt: Date.now() };
     }
     return mo || { type: state.settings.defaultType, studies: 0, notes: '', entries: [] };
   }
@@ -193,6 +402,31 @@
     renderSummary();
     renderHistory();
     els.defaultType.value = state.settings.defaultType;
+    renderSync();
+  }
+  function renderSync() {
+    const hint = $('syncHint');
+    const actions = $('syncActions');
+    if (!hint || !actions) return;
+    const connected = syncOn();
+    hint.textContent = connected
+      ? 'To samo hasło wpisz na telefonie i komputerze – wpisy same się zsynchronizują.'
+      : 'Włącz, żeby mieć te same godziny na telefonie i komputerze.';
+    if (!connected) {
+      actions.innerHTML = '<button type="button" class="btn block" id="syncOnBtn">Włącz synchronizację</button>';
+      $('syncOnBtn').onclick = openSyncDlg;
+      return;
+    }
+    const status = lastSyncError
+      ? `Problem: ${lastSyncError}`
+      : lastSyncAt
+        ? `Połączono · ${new Date(lastSyncAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`
+        : 'Połączono · czekam na sieć';
+    actions.innerHTML = `
+      <button type="button" class="btn block" id="syncNowBtn">${escapeHtml(status)}</button>
+      <button type="button" class="btn block danger" id="syncOffBtn">Wyłącz synchronizację na tym urządzeniu</button>`;
+    $('syncNowBtn').onclick = syncNow;
+    $('syncOffBtn').onclick = syncOff;
   }
 
   function renderReport() {
@@ -414,9 +648,14 @@
     const cat = draftCat;
     const add = draftMin;
     const month = getMonth(monthKeyFromDay(currentDay), true);
+    month.updatedAt = Date.now();
     const existing = month.entries.find((e) => e.date === currentDay && entryCat(e) === cat);
-    if (existing) existing.min += add;
-    else month.entries.push({ id: uid(), date: currentDay, min: add, cat, note: '' });
+    if (existing) {
+      existing.min += add;
+      existing.updatedAt = Date.now();
+    } else {
+      month.entries.push({ id: uid(), date: currentDay, min: add, cat, note: '', updatedAt: Date.now() });
+    }
     draftCat = 'teren';
     state.settings.lastMin = add;
     state.settings.lastCat = 'teren';
@@ -451,10 +690,14 @@
       e.min = min;
       e.cat = editCat;
       e.note = note;
+      e.updatedAt = Date.now();
+      mo.updatedAt = Date.now();
       const other = (mo.entries || []).find((x) => x.id !== e.id && x.date === e.date && entryCat(x) === editCat);
       if (other) {
         other.min += e.min;
         if (e.note) other.note = other.note ? `${other.note}; ${e.note}` : e.note;
+        other.updatedAt = Date.now();
+        markRemoved(e.id);
         mo.entries = mo.entries.filter((x) => x.id !== e.id);
       }
       break;
@@ -466,8 +709,10 @@
   function deleteEntry() {
     if (!editingId) return;
     if (!confirm('Usunąć ten wpis?')) return;
+    markRemoved(editingId);
     for (const mo of Object.values(state.months)) {
       mo.entries = (mo.entries || []).filter((x) => x.id !== editingId);
+      mo.updatedAt = Date.now();
     }
     save();
     els.entryDialog.close();
@@ -517,7 +762,12 @@
         const parsed = JSON.parse(reader.result);
         if (!parsed || typeof parsed.months !== 'object') throw new Error('zły format');
         if (!confirm('Zastąpić obecne dane danymi z pliku?')) return;
-        const data = { settings: { defaultType: 'publisher', lastMin: 60, lastCat: 'teren', ...(parsed.settings || {}) }, months: parsed.months };
+        const data = {
+          settings: { defaultType: 'publisher', lastMin: 60, lastCat: 'teren', ...(parsed.settings || {}) },
+          months: parsed.months,
+          removed: parsed.removed || {},
+          updatedAt: parsed.updatedAt || Date.now(),
+        };
         migrate(data);
         state = data;
         save(); render(); toast('Zaimportowano');
@@ -576,16 +826,16 @@
   els.typeSegments.onclick = (ev) => {
     const b = ev.target.closest('button[data-type]');
     if (!b) return;
-    getMonth(monthKeyFromDay(currentDay), true).type = b.dataset.type;
+    touchMonth(monthKeyFromDay(currentDay)).type = b.dataset.type;
     save(); render();
   };
-  $('studiesPlus').onclick = () => { getMonth(monthKeyFromDay(currentDay), true).studies++; save(); render(); };
+  $('studiesPlus').onclick = () => { touchMonth(monthKeyFromDay(currentDay)).studies++; save(); render(); };
   $('studiesMinus').onclick = () => {
-    const mo = getMonth(monthKeyFromDay(currentDay), true);
+    const mo = touchMonth(monthKeyFromDay(currentDay));
     mo.studies = Math.max(0, mo.studies - 1);
     save(); render();
   };
-  els.monthNotes.oninput = () => { getMonth(monthKeyFromDay(currentDay), true).notes = els.monthNotes.value; save(); };
+  els.monthNotes.oninput = () => { touchMonth(monthKeyFromDay(currentDay)).notes = els.monthNotes.value; save(); };
 
   $('shareReport').onclick = shareReport;
   $('copyReport').onclick = copyReport;
@@ -598,6 +848,89 @@
     render();
   };
 
+  let syncNeedToken = false;
+  function openSyncDlg() {
+    const form = $('syncForm');
+    form.reset();
+    syncNeedToken = false;
+    $('syncTokenWrap').hidden = true;
+    $('syncPassword2Wrap').hidden = false;
+    $('syncOk').textContent = 'Dalej';
+    $('syncDialog').showModal();
+    setTimeout(() => $('syncPassword').focus(), 50);
+  }
+  async function syncNow() {
+    toast('Odświeżam…');
+    try {
+      await cloudPull();
+      await cloudPush();
+      render();
+      toast('Zsynchronizowano');
+    } catch (e) {
+      lastSyncError = e.message || 'błąd';
+      render();
+      toast(lastSyncError);
+    }
+  }
+  function syncOff() {
+    if (!confirm('Wyłączyć synchronizację na TYM urządzeniu? Dane zostaną tu lokalnie. Inne urządzenia dalej będą zsynchronizowane.')) return;
+    syncInfo = { password: '', token: '' };
+    saveSync();
+    render();
+    toast('Synchronizacja wyłączona tutaj');
+  }
+  $('syncForm').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const form = $('syncForm');
+    const p = form.password.value;
+    if (p.length < 6) { toast('Hasło min. 6 znaków'); return; }
+    if (!syncNeedToken && p !== form.password2.value) { toast('Hasła nie są takie same'); return; }
+    const okBtn = $('syncOk');
+    okBtn.disabled = true;
+    try {
+      if (!syncNeedToken) {
+        syncInfo = { password: p, token: syncInfo.token || '' };
+        try {
+          await cloudPull();
+          if (syncInfo.token) {
+            saveSync();
+            cloudReady = true;
+            $('syncDialog').close();
+            render();
+            toast('Połączono – dane jak na innych urządzeniach');
+            cloudPush().catch(() => {});
+            return;
+          }
+        } catch (e) {
+          if (/złe hasło/.test(e.message || '')) { toast('Złe hasło'); return; }
+        }
+        syncNeedToken = true;
+        $('syncTokenWrap').hidden = false;
+        $('syncPassword2Wrap').hidden = true;
+        okBtn.textContent = 'Połącz';
+        toast('Jeszcze jeden krok, tylko na tym urządzeniu');
+        return;
+      }
+      const token = form.token.value.trim();
+      if (!/^(ghp_|gho_|github_pat_)/.test(token)) {
+        toast('Wklej klucz z GitHuba (zaczyna się od ghp_)');
+        return;
+      }
+      syncInfo = { password: p, token };
+      saveSync();
+      cloudReady = true;
+      await cloudPull();
+      await cloudPush();
+      $('syncDialog').close();
+      render();
+      toast('Synchronizacja włączona');
+    } catch (e) {
+      toast(e.message || 'Nie udało się połączyć');
+    } finally {
+      okBtn.disabled = false;
+    }
+  };
+  $('cancelSync').onclick = () => $('syncDialog').close();
   $('openSettings').onclick = () => switchView('settings');
   els.defaultType.onchange = () => { state.settings.defaultType = els.defaultType.value; save(); };
   $('exportBtn').onclick = exportJSON;
@@ -605,7 +938,7 @@
   $('importFile').onchange = (ev) => { if (ev.target.files[0]) importJSON(ev.target.files[0]); ev.target.value = ''; };
   $('wipeBtn').onclick = () => {
     if (!confirm('Na pewno usunąć wszystkie dane? Tej operacji nie można cofnąć.')) return;
-    state = { settings: { defaultType: 'publisher', lastMin: 60, lastCat: 'teren' }, months: {} };
+    state = { settings: { defaultType: 'publisher', lastMin: 60, lastCat: 'teren' }, months: {}, removed: {} };
     draftMin = 60; draftCat = 'teren';
     save(); render(); toast('Usunięto dane');
   };
@@ -630,7 +963,7 @@
     if (b) switchView(b.dataset.view);
   };
 
-  for (const d of [els.timeDialog, els.dateDialog, els.entryDialog]) {
+  for (const d of [els.timeDialog, els.dateDialog, els.entryDialog, $('syncDialog')]) {
     d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
   }
 
@@ -639,4 +972,5 @@
   }
 
   render();
+  startCloud();
 })();
